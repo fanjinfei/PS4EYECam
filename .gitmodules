@@ -1,0 +1,6 @@
+[submodule "thirdparty/SDL2"]
+	path = thirdparty/SDL2
+	url = https://github.com/spurious/SDL-mirror.git
+[submodule "thirdparty/libusb"]
+	path = thirdparty/libusb
+	url = https://github.com/HipsterSloth/libusb.git
