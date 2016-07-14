@@ -36,14 +36,14 @@
 #include "libusb.h"
 
 #if defined WIN32 || defined _WIN32 || defined WINCE
-#include <windows.h>
+    #include <windows.h>
 #else
-#include <sys/time.h>
-#include <time.h>
-#if defined __MACH__ && defined __APPLE__
-#include <mach/mach.h>
-#include <mach/mach_time.h>
-#endif
+    #include <sys/time.h>
+    #include <time.h>
+    #if defined __MACH__ && defined __APPLE__
+       #include <mach/mach.h>
+       #include <mach/mach_time.h>
+    #endif
 #endif
 
 #ifdef min
@@ -55,6 +55,8 @@
 #include <fstream>
 #include <thread>
 #include <chrono>
+#include <memory>
+#include <string.h>
 
 #define CHUNK_SIZE 512
 
@@ -170,6 +172,9 @@ namespace ps4eye {
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(_A) (sizeof(_A) / sizeof((_A)[0]))
 #endif
+
+#define BILLION  1000000000LL
+
     // timestapms
     // WIN and MAC only
     static int64_t getTickCount()
@@ -178,8 +183,18 @@ namespace ps4eye {
         LARGE_INTEGER counter;
         QueryPerformanceCounter( &counter );
         return (int64_t)counter.QuadPart;
-#else
+#elif defined __MACH__ && defined __APPLE__
         return (int64_t)mach_absolute_time();
+#else
+        struct timespec time_spec;
+        clock_gettime(CLOCK_REALTIME, &time_spec);
+
+        struct timespec res_spec;
+        clock_getres(CLOCK_REALTIME, &res_spec);
+
+        int64_t ticks= (time_spec.tv_sec*BILLION + time_spec.tv_nsec) / res_spec.tv_nsec;
+
+        return ticks;
 #endif
     }
 
@@ -189,13 +204,22 @@ namespace ps4eye {
         LARGE_INTEGER freq;
         QueryPerformanceFrequency(&freq);
         return (double)freq.QuadPart;
-#else
+#elif defined __MACH__ && defined __APPLE__
         static double freq = 0;
         if( freq == 0 )
         {
             mach_timebase_info_data_t sTimebaseInfo;
             mach_timebase_info(&sTimebaseInfo);
             freq = sTimebaseInfo.denom*1e9/sTimebaseInfo.numer;
+        }
+        return freq;
+#else
+        static double freq = 0;
+        if( freq == 0 )
+        {
+            struct timespec spec;
+            clock_getres(CLOCK_REALTIME, &spec);
+            freq= 1e9 / spec.tv_nsec;
         }
         return freq;
 #endif
@@ -257,7 +281,7 @@ namespace ps4eye {
     USBMgr::USBMgr()
     {
         libusb_init(&usb_context);
-        libusb_set_debug(usb_context, 4);
+        libusb_set_debug(usb_context, 3);
     }
 
     USBMgr::~USBMgr()
@@ -278,7 +302,11 @@ namespace ps4eye {
 
     bool USBMgr::handleEvents()
     {
-        return (libusb_handle_events(instance()->usb_context) == 0);
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 50 * 1000; // ms
+
+        return (libusb_handle_events_timeout_completed(instance()->usb_context, &tv, NULL) == 0);
     }
 
     int USBMgr::listDevices( std::vector<PS4EYECam::PS4EYERef>& list )
@@ -1535,13 +1563,13 @@ namespace ps4eye {
 
 
 
-        if(!check_sensors())
-        {
-            debug("Sanity check from sensors failed\n");
-            //set_led_off();
-            //reset_sensors();
-            return false;
-        }
+        // if(!check_sensors())
+        // {
+        //     debug("Sanity check from sensors failed\n");
+        //     //set_led_off();
+        //     //reset_sensors();
+        //     return false;
+        // }
     /*  TODO play with video modes perhaps we will need to go to uvc path without ov580 information.
         debug("Show video mode registers from sensor 1\n");
         dump_sensor_video_mode(1);
@@ -1647,13 +1675,13 @@ namespace ps4eye {
         }
 
         frame_stride = frame_width * 2;
-        if(!check_sensors())
-        {
-            debug("Sanity check from sensors failed\n");
-            //set_led_off();
-            //reset_sensors();
-            return false;
-        }
+        // if(!check_sensors())
+        // {
+        //     debug("Sanity check from sensors failed\n");
+        //     //set_led_off();
+        //     //reset_sensors();
+        //     return false;
+        // }
 
         if(!init_registers())
         {
@@ -2628,6 +2656,24 @@ namespace ps4eye {
         }
 
         dump_device();
+
+        // Check whether a kernel driver is attached to interface #1. (commonly uvcvideo module)
+        // If so, we'll need to detach it.
+        if (libusb_kernel_driver_active(handle_, 1))
+        {
+            res = libusb_detach_kernel_driver(handle_, 1);
+
+            if (res != 0)
+            {
+                debug("Error detaching kernel driver: %d\n", res);
+                return false;
+            }
+
+            debug("detached kernel driver for interface #1\n");
+        }
+        else{
+            debug("kernel driver for interface #1 not attached\n");
+        }
 
         //Follow steps showed in usb sniffer capture
         //set configuration 1

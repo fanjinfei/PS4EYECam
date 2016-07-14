@@ -6,6 +6,8 @@
 
 #include <SDL.h>
 #include "ps4eye.h"
+#include <thread>
+#include <atomic>
 
 struct ps4eye_context {
     ps4eye_context()
@@ -18,7 +20,7 @@ struct ps4eye_context {
 
     }
     
-    bool setup(int deviceIndex, int width, int height, int fps)
+    bool setup(int deviceIndex, int mode, int fps)
     {
         bool bSuccess= true;
                
@@ -42,10 +44,20 @@ struct ps4eye_context {
         
         if (bSuccess)
         {
-            bSuccess= eye->init(1, (uint8_t)fps);
+            bSuccess= eye->init(mode, (uint8_t)fps);
+        }
+
+        if (bSuccess)
+        {
+            startTransferThread();            
         }
                
         return bSuccess;
+    }
+
+    void shutdown()
+    {
+        stopTransferThread();
     }
 
     bool hasDevices()
@@ -57,6 +69,32 @@ struct ps4eye_context {
     {
         return eye != NULL; // && eye->isInitialized();
     }
+
+    void startTransferThread()
+    {
+        update_thread = std::thread(&ps4eye_context::transferThreadFunc, this);
+        thread_started = true;
+    }
+
+    void stopTransferThread()
+    {
+        exit_signaled = true;
+        update_thread.join();
+
+        thread_started = false;
+        // Reset the exit signal flag.
+        // If we don't and we call startTransferThread() again, transferThreadFunc will exit immediately.
+        exit_signaled = false;    
+    }
+
+    void transferThreadFunc()
+    {
+        while (!exit_signaled)
+        {
+            bool res = ps4eye::PS4EYECam::updateDevices();
+            if(!res) break;
+        }
+    }
     
     ps4eye::PS4EYECam::PS4EYERef eye;
     std::vector<ps4eye::PS4EYECam::PS4EYERef> devices;
@@ -64,6 +102,10 @@ struct ps4eye_context {
     bool running;
     Uint32 last_ticks;
     Uint32 last_frames;
+
+    std::thread update_thread;
+    bool thread_started;
+	std::atomic_bool exit_signaled;    
 };
 
 void
@@ -81,7 +123,7 @@ main(int argc, char *argv[])
 
     if (argc >= 2)
     {
-        if (sscanf_s(argv[1], "%d", &camera_index) != 1)
+        if (sscanf(argv[1], "%d", &camera_index) != 1)
         {
             printf("usage: ps3eye_sdl.exe <camera index>");
         }
@@ -94,14 +136,12 @@ main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    if (!ctx->setup(camera_index, 1280, 800, 30))
+    if (!ctx->setup(camera_index, 0, 60))
     {
         printf("PS3 Eye camera(%d) failed to initialize\n", camera_index);
         return EXIT_FAILURE;
     }
     
-    ctx->eye->set_mirror_sensors(1); /* mirrored left-right */
-
     //char usb_port_path[64];
     //if (ctx->eye->getUSBPortPath(usb_port_path, sizeof(usb_port_path)))
     //{
@@ -119,13 +159,14 @@ main(int argc, char *argv[])
 
     SDL_Window *window = SDL_CreateWindow(
             "PS3 Eye - SDL 2", SDL_WINDOWPOS_UNDEFINED,
-            SDL_WINDOWPOS_UNDEFINED, 640, 480, 0);
+            SDL_WINDOWPOS_UNDEFINED, 1280, 800, 0);
     if (window == NULL) {
         printf("Failed to create window: %s\n", SDL_GetError());
         return EXIT_FAILURE;
     }
 
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1,
+                                                //SDL_RENDERER_SOFTWARE);
                                                 SDL_RENDERER_PRESENTVSYNC);
     if (renderer == NULL) {
         printf("Failed to create renderer: %s\n", SDL_GetError());
@@ -154,7 +195,9 @@ main(int argc, char *argv[])
     
     while (ctx->running) {
         while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_QUIT) {
+            if (e.type == SDL_QUIT || 
+                (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE))
+            {
                 ctx->running = false;
             }
             else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_SPACE)
@@ -163,7 +206,7 @@ main(int argc, char *argv[])
             }
         }
 
-        ps4eye::PS4EYECam::updateDevices();
+        //ps4eye::PS4EYECam::updateDevices();
 
         if (ctx->eye->isNewFrame())
         {
@@ -193,11 +236,13 @@ main(int argc, char *argv[])
             }
         }
 
-        SDL_RenderCopy(renderer, video_tex, NULL, NULL);
+        SDL_RendererFlip flip = static_cast<SDL_RendererFlip>(SDL_FLIP_HORIZONTAL | SDL_FLIP_VERTICAL);
+        SDL_RenderCopyEx(renderer, video_tex, NULL, NULL, 0, NULL, flip);
         SDL_RenderPresent(renderer);
     }
 
     ctx->eye->stop();
+    ctx->shutdown();
     delete ctx;
 
     SDL_DestroyTexture(video_tex);
