@@ -2,14 +2,14 @@
 setlocal
 
 :: Add MSVC build tools to the path
-call "C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\vcvarsall.bat" x86
+call "C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\vcvarsall.bat" amd64
 
 :: Compile the DEBUG|x64 and RELEASE|x64 builds of libusb
 pushd thirdparty\libusb\msvc\
 echo "Building libusb DEBUG|x64..."
-MSBuild.exe libusb_2015.sln /tv:12.0 /p:configuration=DEBUG /p:Platform="x64" /t:Clean;Build 
+MSBuild.exe libusb_2015.sln /tv:14.0 /p:configuration=DEBUG /p:Platform="x64" /t:Clean;Build 
 echo "Building libusb RELEASE|x64..."
-MSBuild.exe libusb_2015.sln /tv:12.0 /p:configuration=RELEASE /p:Platform="x64" /t:Clean;Build
+MSBuild.exe libusb_2015.sln /tv:14.0 /p:configuration=RELEASE /p:Platform="x64" /t:Clean;Build
 popd
 
 :: Compile the RELEASE|x64 build of SDL2
